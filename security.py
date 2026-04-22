@@ -6,13 +6,15 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 import models, database
+import os 
+
 
 
 # 1. Setup Password Hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 2. Secret Settings (In a real app, these go in the .env file)
-SECRET_KEY = "SUPER_SECRET_KEY_FOR_YOUR_PFE" 
+# 2. Secret Settings 
+SECRET_KEY = os.getenv("SECRET_KEY") 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # Token lasts 24 hours
 
