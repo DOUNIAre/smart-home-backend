@@ -137,3 +137,12 @@ class DeviceActionHistory(Base):
     # Relationships
     device = relationship("SmartDevice")
     user = relationship("User")
+
+class Rule(Base):
+    __tablename__ = "rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    condition_device_type = Column(String) # e.g., "AC"
+    forbidden_device_type = Column(String) # e.g., "Heater"
+    priority = Column(Integer, default=1) # 1 = Highest, 3 = Lowest

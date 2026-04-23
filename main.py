@@ -117,30 +117,59 @@ def add_device(room_id: int, device: schemas.DeviceCreate, db: Session = Depends
 # --- CONTROL & LOGIC ---
 
 @app.post("/devices/{device_id}/toggle")
-def toggle_device(device_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(security.get_current_user)):
+def toggle_device(
+    device_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(security.get_current_user)
+):
+    # 1. Find the device
     device = db.query(models.SmartDevice).filter(models.SmartDevice.id == device_id).first()
-    if not device: raise HTTPException(status_code=404, detail="Device not found")
+    if not device: 
+        raise HTTPException(status_code=404, detail="Device not found")
 
-    # Membership Check
+    # 2. Membership Check (Authorization)
     room = db.query(models.Room).filter(models.Room.id == device.room_id).first()
-    is_member = db.query(models.Membership).filter(models.Membership.user_id == current_user.id, models.Membership.house_id == room.house_id).first()
-    if not is_member: raise HTTPException(status_code=403, detail="Unauthorized")
+    is_member = db.query(models.Membership).filter(
+        models.Membership.user_id == current_user.id, 
+        models.Membership.house_id == room.house_id
+    ).first()
+    
+    if not is_member: 
+        raise HTTPException(status_code=403, detail="Unauthorized: You do not have access to this house.")
 
-    # Safety Rule Check
-    is_safe, msg = rules.check_safety_rules(db, room.id, device.device_type, not device.status)
-    if not is_safe: raise HTTPException(status_code=400, detail=msg)
+    # 3. DYNAMIC RULE PRIORITY CHECK
+    # We pass 'not device.status' because we want to check if the 
+    # NEW state the user wants is safe.
+    is_safe, msg = rules.check_all_rules(
+        db, 
+        room_id=room.id, 
+        target_device_type=device.device_type, 
+        target_status=not device.status
+    )
+    
+    if not is_safe: 
+        # This will now return the specific rule name and priority that blocked the action
+        raise HTTPException(status_code=400, detail=msg)
 
-    # Execute Action
+    # 4. Execute Action
     device.status = not device.status
     
-    # Log History
+    # 5. Log History (Memory for AI Team)
     history = models.DeviceActionHistory(
-        device_id=device.id, user_id=current_user.id,
-        action_type="TOGGLE", new_value=1 if device.status else 0, origin="MANUAL"
+        device_id=device.id, 
+        user_id=current_user.id,
+        action_type="TOGGLE", 
+        new_value=1 if device.status else 0, 
+        origin="MANUAL"
     )
     db.add(history)
     db.commit()
-    return {"status": "success", "new_status": device.status}
+    
+    return {
+        "status": "success", 
+        "new_status": device.status,
+        "device_name": device.name
+    }
 
 @app.get("/rooms/{room_id}/apply-logic/{category}")
 def apply_conflict_resolution(room_id: int, category: str, db: Session = Depends(get_db)):

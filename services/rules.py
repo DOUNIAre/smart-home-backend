@@ -1,31 +1,27 @@
 from sqlalchemy.orm import Session
 import models
 
-def check_safety_rules(db: Session, room_id: int, new_device_type: str, new_status: bool):
+def check_all_rules(db: Session, room_id: int, target_device_type: str, target_status: bool):
     """
-    Returns True if the action is safe.
-    Returns False if it violates a safety rule (like AC + Heater).
+    Checks the proposed action against all rules in the database, 
+    sorted by priority.
     """
-    # Rule 1: If we are turning ON the AC, the Heater must be OFF.
-    if new_device_type == "AC" and new_status == True:
-        heater = db.query(models.SmartDevice).filter(
-            models.SmartDevice.room_id == room_id,
-            models.SmartDevice.device_type == "Heater",
-            models.SmartDevice.status == True
-        ).first()
-        if heater:
-            return False, "Cannot turn on AC while Heater is running!"
+    # 1. Get all rules from the DB sorted by Priority (1, 2, 3...)
+    all_rules = db.query(models.Rule).order_by(models.Rule.priority.asc()).all()
 
-    # Rule 2: If we are turning ON the Heater, the AC must be OFF.
-    if new_device_type == "Heater" and new_status == True:
-        ac = db.query(models.SmartDevice).filter(
-            models.SmartDevice.room_id == room_id,
-            models.SmartDevice.device_type == "AC",
-            models.SmartDevice.status == True
-        ).first()
-        if ac:
-            return False, "Cannot turn on Heater while AC is running!"
+    # 2. Only check rules if we are trying to turn a device ON
+    if target_status == True:
+        for rule in all_rules:
+            # Check if this rule applies to the device we are moving
+            if rule.condition_device_type == target_device_type:
+                # Look if the 'forbidden' device is already ON in that room
+                conflict = db.query(models.SmartDevice).filter(
+                    models.SmartDevice.room_id == room_id,
+                    models.SmartDevice.device_type == rule.forbidden_device_type,
+                    models.SmartDevice.status == True
+                ).first()
+
+                if conflict:
+                    return False, f"Rule '{rule.name}' (Priority {rule.priority}): Cannot turn on {target_device_type} while {rule.forbidden_device_type} is running."
 
     return True, "Safe"
-
-# we can add more rules later for now thi
