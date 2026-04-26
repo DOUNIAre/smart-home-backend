@@ -15,6 +15,13 @@ from fastapi.security import OAuth2PasswordRequestForm
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Smart Home AI System - Final Version")
+@app.get("/")
+def read_root():
+    return {
+        "message": "Smart Home API is Online",
+        "status": "Running",
+        "docs": "/docs"
+    }
 
 # --- HELPER FUNCTIONS ---
 
@@ -105,9 +112,18 @@ def create_room(house_id: int, room: schemas.RoomCreate, db: Session = Depends(g
 
 @app.post("/rooms/{room_id}/devices/", response_model=schemas.DeviceOut)
 def add_device(room_id: int, device: schemas.DeviceCreate, db: Session = Depends(get_db)):
+    # 1. Verify room exists
+    room = db.query(models.Room).filter(models.Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    # 2. Create device (OWNER_ID REMOVED FROM HERE)
     new_device = models.SmartDevice(
-        name=device.name, device_type=device.device_type, room_id=room_id,
-        owner_id=device.owner_id, status=False, value=0
+        name=device.name,
+        device_type=device.device_type,
+        room_id=room_id,
+        status=False, 
+        value=0       
     )
     db.add(new_device)
     db.commit()
@@ -122,54 +138,52 @@ def toggle_device(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(security.get_current_user)
 ):
-    # 1. Find the device
+    # 1. Find device
     device = db.query(models.SmartDevice).filter(models.SmartDevice.id == device_id).first()
     if not device: 
         raise HTTPException(status_code=404, detail="Device not found")
 
-    # 2. Membership Check (Authorization)
-    room = db.query(models.Room).filter(models.Room.id == device.room_id).first()
-    is_member = db.query(models.Membership).filter(
-        models.Membership.user_id == current_user.id, 
-        models.Membership.house_id == room.house_id
+    # 2. NEW AUTHORITY CHECK: Check RoomAssignment
+    # Does THIS user have a row in RoomAssignment for THIS room?
+    assignment = db.query(models.RoomAssignment).filter(
+        models.RoomAssignment.user_id == current_user.id,
+        models.RoomAssignment.room_id == device.room_id
     ).first()
     
-    if not is_member: 
-        raise HTTPException(status_code=403, detail="Unauthorized: You do not have access to this house.")
+    if not assignment:
+        raise HTTPException(
+            status_code=403, 
+            detail="Access Denied: You are not assigned to this room."
+        )
 
-    # 3. DYNAMIC RULE PRIORITY CHECK
-    # We pass 'not device.status' because we want to check if the 
-    # NEW state the user wants is safe.
-    is_safe, msg = rules.check_all_rules(
-        db, 
-        room_id=room.id, 
-        target_device_type=device.device_type, 
-        target_status=not device.status
-    )
-    
-    if not is_safe: 
-        # This will now return the specific rule name and priority that blocked the action
+    # 3. CONFLICT DETECTION: Count users assigned to this room
+    user_count = db.query(models.RoomAssignment).filter(
+        models.RoomAssignment.room_id == device.room_id
+    ).count()
+
+    # If more than 1 person lives in this room, use the Preference Resolver
+    if user_count > 1:
+        return {
+            "status": "conflict_detected",
+            "message": f"There are {user_count} users in this room. Use 'Apply Logic' to resolve."
+        }
+
+    # 4. SAFETY RULES (Priority check)
+    is_safe, msg = rules.check_all_rules(db, device.room_id, device.device_type, not device.status)
+    if not is_safe:
         raise HTTPException(status_code=400, detail=msg)
 
-    # 4. Execute Action
+    # 5. EXECUTE & LOG
     device.status = not device.status
     
-    # 5. Log History (Memory for AI Team)
     history = models.DeviceActionHistory(
-        device_id=device.id, 
-        user_id=current_user.id,
-        action_type="TOGGLE", 
-        new_value=1 if device.status else 0, 
-        origin="MANUAL"
+        device_id=device.id, user_id=current_user.id,
+        action_type="TOGGLE", new_value=1 if device.status else 0, origin="MANUAL"
     )
     db.add(history)
     db.commit()
     
-    return {
-        "status": "success", 
-        "new_status": device.status,
-        "device_name": device.name
-    }
+    return {"status": "success", "new_status": device.status}
 
 @app.get("/rooms/{room_id}/apply-logic/{category}")
 def apply_conflict_resolution(room_id: int, category: str, db: Session = Depends(get_db)):
@@ -247,3 +261,34 @@ def get_house_history(house_id: int, db: Session = Depends(get_db)):
     return db.query(models.DeviceActionHistory).join(models.SmartDevice).join(models.Room).filter(
         models.Room.house_id == house_id
     ).order_by(models.DeviceActionHistory.timestamp.desc()).all()
+
+# --- ROOM ASSIGNMENT ROUTE ---
+# This is the "Key" that allows a user to control devices in a specific room.
+
+@app.post("/rooms/{room_id}/assign/{user_id}")
+def assign_user_to_room(room_id: int, user_id: int, db: Session = Depends(get_db)):
+    # 1. Check if the user exists
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 2. Check if the room exists
+    room = db.query(models.Room).filter(models.Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    # 3. Check if they are already assigned (Avoid duplicates)
+    existing = db.query(models.RoomAssignment).filter(
+        models.RoomAssignment.room_id == room_id,
+        models.RoomAssignment.user_id == user_id
+    ).first()
+    
+    if existing:
+        return {"message": "User is already assigned to this room"}
+
+    # 4. Create the link in the Database
+    new_assignment = models.RoomAssignment(room_id=room_id, user_id=user_id)
+    db.add(new_assignment)
+    db.commit()
+    
+    return {"message": f"User {user.name} successfully assigned to {room.name}"}

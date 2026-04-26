@@ -60,11 +60,6 @@ class SmartDevice(Base):
     value = Column(Integer, default=0) # e.g., 22 degrees or 70% brightness
     room_id = Column(Integer, ForeignKey("rooms.id"))
     
-    # Logic for Ownership: 
-    # If owner_id is NULL, the device is SHARED.
-    # If owner_id has a User ID, it is PERSONAL.
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-
     room = relationship("Room", back_populates="devices")
 
 class UserPreference(Base):
@@ -146,3 +141,15 @@ class Rule(Base):
     condition_device_type = Column(String) # e.g., "AC"
     forbidden_device_type = Column(String) # e.g., "Heater"
     priority = Column(Integer, default=1) # 1 = Highest, 3 = Lowest
+
+class RoomAssignment(Base):
+    __tablename__ = "room_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    room_id = Column(Integer, ForeignKey("rooms.id"))
+    
+    
+
+    user = relationship("User")
+    room = relationship("Room")

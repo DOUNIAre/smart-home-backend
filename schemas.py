@@ -55,8 +55,8 @@ class RoomOut(BaseModel):
 class DeviceCreate(BaseModel):
     name: str
     device_type: str # e.g., "AC", "Light", "Heater"
-    owner_id: Optional[int] = None # Optional! If empty, it's a shared device.
-
+    
+    
 class DeviceOut(BaseModel):
     id: int
     name: str
@@ -64,8 +64,7 @@ class DeviceOut(BaseModel):
     status: bool
     value: int
     room_id: int
-    owner_id: Optional[int]
-
+    
     class Config:
         from_attributes = True
 
